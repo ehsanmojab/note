@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { ref, watch, computed, onBeforeUnmount } from 'vue'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { useNotesStore } from '../stores/notes'
@@ -14,24 +14,33 @@ const emit = defineEmits<{
 
 const notesStore = useNotesStore()
 const localTitle = ref('')
-const deleteDialogOpen = ref(false)
+const permanentDeleteDialogOpen = ref(false)
+
+const currentNote = computed(() => {
+  return notesStore.notes.find((n) => n.id === props.noteId) || null
+})
+
+const isBinned = computed(() => {
+  return !!currentNote.value?.is_deleted
+})
 
 // Initialize Tiptap editor with StarterKit
 const editor = useEditor({
   extensions: [StarterKit],
+  editable: !isBinned.value,
   editorProps: {
     attributes: {
       class: 'prose prose-sm dark:prose-invert max-w-none focus:outline-none min-h-[300px] p-4 text-gray-900 dark:text-gray-100',
     },
   },
   onUpdate: ({ editor: ed }) => {
-    if (!props.noteId) return
+    if (!props.noteId || isBinned.value) return
     const contentJson = JSON.stringify(ed.getJSON())
     notesStore.scheduleAutosave(props.noteId, localTitle.value, contentJson)
   },
 })
 
-// Synchronize editor content when active note changes
+// Update editor content and editability when active note changes
 watch(
   () => props.noteId,
   (newId) => {
@@ -42,6 +51,7 @@ watch(
     localTitle.value = note.title || ''
 
     if (editor.value) {
+      editor.value.setEditable(!note.is_deleted)
       try {
         const parsed = JSON.parse(note.content)
         editor.value.commands.setContent(parsed, { emitUpdate: false })
@@ -53,18 +63,39 @@ watch(
   { immediate: true }
 )
 
-// Watch title change and trigger autosave
+// Watch isBinned to toggle editability
+watch(isBinned, (binned) => {
+  if (editor.value) {
+    editor.value.setEditable(!binned)
+  }
+})
+
+// Watch title change and trigger autosave if not in bin
 function onTitleInput() {
-  if (!props.noteId || !editor.value) return
+  if (!props.noteId || !editor.value || isBinned.value) return
   const contentJson = JSON.stringify(editor.value.getJSON())
   notesStore.scheduleAutosave(props.noteId, localTitle.value, contentJson)
 }
 
-// Confirmation and delete
-async function confirmDelete() {
-  deleteDialogOpen.value = false
+// Action: Move note to bin
+async function handleMoveToBin() {
   if (props.noteId) {
-    const success = await notesStore.deleteNote(props.noteId)
+    await notesStore.moveToBin(props.noteId)
+  }
+}
+
+// Action: Restore note from bin
+async function handleRestore() {
+  if (props.noteId) {
+    await notesStore.restoreNote(props.noteId)
+  }
+}
+
+// Action: Permanently delete note
+async function handlePermanentDelete() {
+  permanentDeleteDialogOpen.value = false
+  if (props.noteId) {
+    const success = await notesStore.permanentlyDeleteNote(props.noteId)
     if (success) {
       emit('back')
     }
@@ -78,6 +109,53 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex flex-col h-full bg-white dark:bg-gray-900 overflow-hidden">
+    <!-- Binned Warning Notice Banner -->
+    <div
+      v-if="isBinned"
+      class="bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-900 px-4 py-2 flex items-center justify-between text-xs text-amber-800 dark:text-amber-200 shrink-0 gap-2"
+    >
+      <div class="flex items-center gap-1.5 truncate">
+        <svg class="w-4 h-4 text-amber-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+        <span class="truncate">This note is in the <strong>Bin</strong>. It will stay here until permanently deleted.</span>
+      </div>
+      <div class="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          @click="handleRestore"
+          class="inline-flex items-center gap-1 px-2.5 py-1 font-semibold rounded bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-gray-700 transition-colors shadow-xs"
+        >
+          <svg class="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+          </svg>
+          Restore
+        </button>
+        <button
+          type="button"
+          @click="permanentDeleteDialogOpen = true"
+          class="inline-flex items-center gap-1 px-2.5 py-1 font-semibold rounded bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-xs"
+        >
+          Permanently Delete
+        </button>
+      </div>
+    </div>
+
+    <!-- Error Banner if Database Migration is needed -->
+    <div
+      v-if="notesStore.errorMessage"
+      class="bg-rose-50 dark:bg-rose-950/80 border-b border-rose-200 dark:border-rose-900 px-4 py-2 text-xs text-rose-700 dark:text-rose-300 flex items-center justify-between"
+    >
+      <span>{{ notesStore.errorMessage }}</span>
+      <button
+        type="button"
+        @click="notesStore.errorMessage = null"
+        class="text-rose-500 hover:text-rose-700 font-bold ml-2"
+      >
+        ✕
+      </button>
+    </div>
+
     <!-- Editor Header Toolbar -->
     <div class="flex items-center justify-between px-3 sm:px-6 py-2.5 border-b border-gray-200 dark:border-gray-800 bg-gray-50/70 dark:bg-gray-900/70 backdrop-blur shrink-0 gap-2">
       <div class="flex items-center gap-2">
@@ -93,8 +171,8 @@ onBeforeUnmount(() => {
           </svg>
         </button>
 
-        <!-- Autosave Status Badge -->
-        <div class="flex items-center gap-1.5 text-xs font-medium">
+        <!-- Autosave Status Badge (Only shown if note is active) -->
+        <div v-if="!isBinned" class="flex items-center gap-1.5 text-xs font-medium">
           <span
             v-if="notesStore.saveStatus === 'saved'"
             class="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"
@@ -135,17 +213,43 @@ onBeforeUnmount(() => {
 
       <!-- Action Buttons -->
       <div class="flex items-center gap-2">
+        <!-- Active Note: Move to Bin Button -->
         <button
+          v-if="!isBinned"
           type="button"
-          @click="deleteDialogOpen = true"
+          @click="handleMoveToBin"
           class="inline-flex items-center gap-1 min-h-[44px] px-3 py-1.5 text-xs font-medium rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 focus:outline-none focus:ring-2 focus:ring-rose-500 transition-colors"
-          aria-label="Delete note"
+          title="Move note to Bin"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
-          <span class="hidden sm:inline">Delete</span>
+          <span class="hidden sm:inline">Move to Bin</span>
         </button>
+
+        <!-- Binned Note: Restore & Permanent Delete buttons in toolbar -->
+        <template v-else>
+          <button
+            type="button"
+            @click="handleRestore"
+            class="inline-flex items-center gap-1 min-h-[44px] px-3 py-1.5 text-xs font-medium rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+            <span>Restore</span>
+          </button>
+          <button
+            type="button"
+            @click="permanentDeleteDialogOpen = true"
+            class="inline-flex items-center gap-1 min-h-[44px] px-3 py-1.5 text-xs font-medium rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            <span>Permanently Delete</span>
+          </button>
+        </template>
       </div>
     </div>
 
@@ -156,9 +260,10 @@ onBeforeUnmount(() => {
           v-model="localTitle"
           type="text"
           maxlength="200"
+          :disabled="isBinned"
           @input="onTitleInput"
           placeholder="Note title..."
-          class="w-full text-xl sm:text-2xl font-bold bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none"
+          class="w-full text-xl sm:text-2xl font-bold bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none disabled:opacity-75 disabled:cursor-not-allowed"
         />
         <span class="text-xs text-gray-400 dark:text-gray-500 shrink-0 font-mono">
           {{ localTitle.length }}/200
@@ -166,9 +271,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Tiptap Formatting Toolbar -->
+    <!-- Tiptap Formatting Toolbar (Only when active and editable) -->
     <div
-      v-if="editor"
+      v-if="editor && !isBinned"
       class="flex items-center gap-1 px-4 sm:px-8 py-2 border-b border-gray-100 dark:border-gray-800 bg-gray-50/40 dark:bg-gray-900/40 overflow-x-auto text-xs"
     >
       <button
@@ -279,35 +384,35 @@ onBeforeUnmount(() => {
       <editor-content :editor="editor" class="h-full" />
     </div>
 
-    <!-- Delete Confirmation Modal Dialog -->
+    <!-- Permanent Delete Confirmation Modal Dialog -->
     <div
-      v-if="deleteDialogOpen"
+      v-if="permanentDeleteDialogOpen"
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="delete-dialog-title"
+      aria-labelledby="perm-delete-title"
     >
       <div class="w-full max-w-sm p-6 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 space-y-4">
-        <h3 id="delete-dialog-title" class="text-base font-semibold text-gray-900 dark:text-gray-100">
-          Delete this note?
+        <h3 id="perm-delete-title" class="text-base font-bold text-gray-900 dark:text-gray-100">
+          Permanently delete this note?
         </h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400">
-          This action cannot be undone. All data in this note will be permanently deleted.
+        <p class="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+          This note will be permanently erased from your database. This action <strong>cannot be undone</strong>.
         </p>
-        <div class="flex items-center justify-end gap-3 pt-2">
+        <div class="flex items-center justify-end gap-2 pt-2">
           <button
             type="button"
-            @click="deleteDialogOpen = false"
-            class="min-h-[44px] px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-400"
+            @click="permanentDeleteDialogOpen = false"
+            class="min-h-[40px] px-3.5 py-1.5 text-xs font-medium rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
           >
             Cancel
           </button>
           <button
             type="button"
-            @click="confirmDelete"
-            class="min-h-[44px] px-4 py-2 text-sm font-medium rounded-lg bg-rose-600 hover:bg-rose-700 text-white focus:outline-none focus:ring-2 focus:ring-rose-500 shadow-sm"
+            @click="handlePermanentDelete"
+            class="min-h-[40px] px-3.5 py-1.5 text-xs font-medium rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
           >
-            Yes, delete
+            Yes, permanently delete
           </button>
         </div>
       </div>

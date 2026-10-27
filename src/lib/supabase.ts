@@ -5,6 +5,7 @@ export interface Note {
   user_id: string
   title: string
   content: string // Stored as a serialized Tiptap document JSON string
+  is_deleted?: boolean
   created_at: string
   updated_at: string
 }

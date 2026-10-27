@@ -1,6 +1,10 @@
 // Frame-busting check: mitigate clickjacking attacks
-if (window.top && window.top !== window.self) {
-  window.top.location.href = window.self.location.href;
+try {
+  if (window.top && window.top !== window.self) {
+    window.top.location = window.self.location;
+  }
+} catch (e) {
+  // Guard against cross-origin framing security error
 }
 
 // Pre-render theme initialization: prevents Flash of Unstyled Theme (FOUC)

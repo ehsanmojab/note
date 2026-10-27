@@ -2,16 +2,36 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { isSupabaseConfigured, updateSupabaseConfig } from '../lib/supabase'
 import ThemeToggle from '../components/ThemeToggle.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
+// Setup & Credentials
+const configured = ref(isSupabaseConfigured)
+const customUrl = ref('')
+const customKey = ref('')
+
+// Login fields
 const email = ref('')
 const password = ref('')
 const totpCode = ref('')
 const errorMessage = ref<string | null>(null)
 const isSubmitting = ref(false)
+
+function handleSaveConfig() {
+  if (!customUrl.value.trim() || !customKey.value.trim()) {
+    errorMessage.value = 'Please provide both the Supabase Project URL and Anon/Publishable key.'
+    return
+  }
+
+  updateSupabaseConfig(customUrl.value, customKey.value)
+  configured.value = true
+  errorMessage.value = null
+  // Re-init auth
+  authStore.init()
+}
 
 async function handleLogin() {
   if (!email.value || !password.value) {
@@ -94,8 +114,52 @@ async function handleVerifyMfa() {
           <span>{{ errorMessage }}</span>
         </div>
 
-        <!-- MFA TOTP Verification View -->
-        <form v-if="authStore.mfaRequired" @submit.prevent="handleVerifyMfa" class="space-y-5">
+        <!-- 1. Initial Setup Form (If GitHub build variables were not set) -->
+        <div v-if="!configured" class="space-y-4">
+          <div class="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-lg text-xs text-amber-800 dark:text-amber-200 space-y-1">
+            <p class="font-semibold">⚠️ Connect to Supabase</p>
+            <p>Enter your Supabase Project URL and public key below to connect this browser session directly.</p>
+          </div>
+
+          <div>
+            <label for="sb-url" class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Supabase Project URL
+            </label>
+            <input
+              id="sb-url"
+              v-model="customUrl"
+              type="url"
+              placeholder="https://xxxx.supabase.co"
+              required
+              class="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-mono"
+            />
+          </div>
+
+          <div>
+            <label for="sb-key" class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Publishable / Anon Key
+            </label>
+            <input
+              id="sb-key"
+              v-model="customKey"
+              type="text"
+              placeholder="sb_publishable_..."
+              required
+              class="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs font-mono"
+            />
+          </div>
+
+          <button
+            type="button"
+            @click="handleSaveConfig"
+            class="w-full min-h-[44px] flex justify-center items-center py-2.5 px-4 rounded-lg text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors shadow-sm"
+          >
+            Connect & Continue
+          </button>
+        </div>
+
+        <!-- 2. MFA TOTP Verification View -->
+        <form v-else-if="authStore.mfaRequired" @submit.prevent="handleVerifyMfa" class="space-y-5">
           <div>
             <label for="totp" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
               Two-Factor Authentication Code
@@ -129,7 +193,7 @@ async function handleVerifyMfa() {
           </button>
         </form>
 
-        <!-- Standard Password Login View -->
+        <!-- 3. Standard Password Login View -->
         <form v-else @submit.prevent="handleLogin" class="space-y-4">
           <div>
             <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300">

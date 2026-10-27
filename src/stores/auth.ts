@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { supabase } from '../lib/supabase'
+import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import type { User, Session } from '@supabase/supabase-js'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -11,13 +11,18 @@ export const useAuthStore = defineStore('auth', () => {
   const mfaFactorId = ref<string | null>(null)
 
   const isAuthenticated = computed(() => {
-    // Only authenticated if session exists and not pending an MFA challenge
     return !!session.value && !mfaRequired.value
   })
 
   // Initialize auth session and listen for state transitions
   async function init() {
     isInitializing.value = true
+
+    if (!isSupabaseConfigured) {
+      isInitializing.value = false
+      return
+    }
+
     try {
       const { data } = await supabase.auth.getSession()
       session.value = data.session
@@ -67,7 +72,6 @@ export const useAuthStore = defineStore('auth', () => {
       mfaRequired.value = false
       mfaFactorId.value = null
     } catch {
-      // Default to non-blocking if MFA API encounters an error
       mfaRequired.value = false
     }
   }
@@ -113,7 +117,6 @@ export const useAuthStore = defineStore('auth', () => {
       mfaRequired.value = false
       mfaFactorId.value = null
 
-      // Refresh session assurance level
       const { data } = await supabase.auth.getSession()
       session.value = data.session
       user.value = data.session?.user ?? null
